@@ -1,0 +1,18 @@
+working_dir_path: wf_biobb_image
+can_write_console_log: True
+
+workdir: /gpfs/projects/bsc23/bsc23513/BioExcel/BioExcel_EGFR_pmx/MDs 
+
+mutations: [WT] 
+
+ligands: [apo,ire]
+
+image:
+  properties:
+    center_selection : Protein
+    output_selection : System
+    ur: compact
+    pbc: mol
+    center: True
+    gmx_path: gmx_mpi
+
