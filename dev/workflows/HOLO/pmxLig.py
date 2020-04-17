@@ -54,7 +54,6 @@ def main(config, imaged_traj_available):
             global_log.info(ensemble + " Step 0: gmx image: Imaging trajectories to remove PBC issues")
             ensemble_paths['step0_image']['input_top_path'] = conf.properties['input_trajs'][ensemble]['input_tpr_path']
             ensemble_paths['step0_image']['input_traj_path'] = conf.properties['input_trajs'][ensemble]['input_traj_path']
-
             gmx_image_pc(**ensemble_paths["step0_image"], properties=ensemble_prop["step0_image"])
 
         else:

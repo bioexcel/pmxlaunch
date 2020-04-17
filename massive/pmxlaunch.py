@@ -6,10 +6,9 @@ from Bio.PDB.Polypeptide import three_to_one
 from Bio.PDB.Polypeptide import one_to_three
 import re
 import shutil
-import subprocess
 import oyaml as yaml
-
-RESIDUE_NUMBER_OFFSET = 693
+from csv_util import parse_csv
+from wf_defs import props
 
 
 def create_biobb_pth_file(file_path):
@@ -73,12 +72,27 @@ def get_template_config_dict(config_yaml_path):
     with open(config_yaml_path) as config_yaml_file:
         return yaml.safe_load(config_yaml_file)
 
+def apply_defaults(conf_dict):
+    defaults_dict = {
+        'pmx_resnum': int(get_mutation_dict(conf_dict['mutation'])['resnum']) - 693,
+        'ligand': 'APO',
+        'wt_replica': 1,
+        'mut_replica': 1,
+        'fe_length': 50,
+        'num_frames': 100,
+        'free_energy_dt': 0.002,
+        'trajectory_total_num_frames': 10000,
+        'base_dir': '/gpfs/projects/bsc23/bsc23513/BioExcel/BioExcel_EGFR_pmx'
+    }
+    for key, value in conf_dict:
+        if not value:
+            conf_dict[key] = defaults_dict[key]
 
-def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nodes, compss_version, fe_nsteps, fe_length,
-           base_dir, compss_debug, time, output_dir, fe_dt, num_frames, wt_trjconv_skip, mut_trjconv_skip,
-           wt_start, wt_end, mut_start, mut_end, job_name):
-    if pmx_resnum == 0:
-        pmx_resnum = int(get_mutation_dict(mutation)['resnum']) - RESIDUE_NUMBER_OFFSET
+
+def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, fe_nsteps, fe_length,
+           base_dir, output_dir, fe_dt, num_frames, wt_trjconv_skip, mut_trjconv_skip,
+           wt_start, wt_end, mut_start, mut_end):
+
 
     base_dir = Path(base_dir)
     pth_path = Path.home().joinpath('.local', 'lib', 'python3.6', 'site-packages', 'biobb.pth')
@@ -132,16 +146,11 @@ def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nod
     run_dir = working_dir_path.joinpath("wf_pmx")
     config_yaml_path = working_dir_path.joinpath(f"pmx.yaml")
     wf_py_path = working_dir_path.joinpath(f"pmx.py")
-    launch_path = working_dir_path.joinpath(f"launch.sh")
-    if not job_name:
-        job_name = long_name
     while run_dir.exists():
         run_number += 1
         run_dir = working_dir_path.joinpath(f"wf_pmx_{str(run_number)}")
         config_yaml_path = working_dir_path.joinpath(f"pmx_{str(run_number)}.yaml")
         wf_py_path = working_dir_path.joinpath(f"pmx_{str(run_number)}.py")
-        launch_path = working_dir_path.joinpath(f"launch_{str(run_number)}.sh")
-        job_name = f"{job_name}_{str(run_number)}"
 
     # Copy py file
     shutil.copyfile(template_py_path, wf_py_path)
@@ -166,7 +175,7 @@ def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nod
 
     if apo:
         config_dict['step11_gmx_grompp']['properties']['mdp']['nsteps'] = fe_nsteps
-        config_dict['step11_gmx_grompp']['properties']['mdp']['delta-lambda'] = float(f'{1 / fe_nsteps:.0g}')
+        config_dict['step11_gmx_grompp']['properties']['mdp']['delta-lambda'] =  float(f'{1 / fe_nsteps:.0g}')
     else:
         clean_ligand_name = ligand.upper()
         if '_' in ligand:
@@ -181,98 +190,86 @@ def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nod
     with open(config_yaml_path, 'w') as config_yaml_file:
         config_yaml_file.write(yaml.dump(config_dict))
 
-    # Create launch
-    with open(launch_path, 'w') as launch_file:
-        launch_file.write(f"#!/bin/bash\n")
-        launch_file.write(f"\n")
-        launch_file.write(f"module purge\n")
-        launch_file.write(f"\n")
-        launch_file.write(f"module load ANACONDA/2018.12_py3\n")
-        launch_file.write(f"source activate biobb\n")
-        launch_file.write(f"\n")
-        launch_file.write(f"# COMPSs environment\n")
-        launch_file.write(f"export COMPSS_PYTHON_VERSION=none\n")
-        launch_file.write(f"# COMPSs release\n")
-        launch_file.write(f"module load COMPSs/{compss_version}\n")
-        launch_file.write(f"\n")
-        launch_file.write(f"# Singularity\n")
-        launch_file.write(f"module load singularity\n")
-        launch_file.write(f"\n")
-        launch_file.write(f"#GROMACS 2019\n")
-        launch_file.write(f"module load intel/2018.4 impi/2018.4 mkl/2018.4 gromacs/2019.1\n")
-        launch_file.write(f"\n")
-        launch_file.write(f"#Permissions for everyone\n")
-        launch_file.write(f"umask ugo+rwx\n")
-        launch_file.write(f"\n")
-        launch_file.write(f"enqueue_compss ")
-        if compss_debug:
-            launch_file.write(f"-d ")
-        launch_file.write(f"--job_name={job_name} \
-                          --num_nodes={num_nodes} \
-                          --exec_time={str(time)} \
-                          --base_log_dir=$PWD \
-                          --network=ethernet \
-                          --qos={queue}  \
-                          {wf_py_path} \
-                          --config {config_yaml_path} ")
-        if imaged_traj_available:
-            launch_file.write(f"--imaged_traj_available ")
-        launch_file.write(f"\n")
+    from wf_defs.wfs import lig_wf, apo_wf
+    wf = lig_wf
+    if apo:
+        wf = apo_wf
 
-    subprocess.call(f"bash {launch_path}", shell=True)
+    if imaged_traj_available:
+        wf("--config", config_yaml_path, "--imaged_traj_available")
+    else:
+        wf("--config", config_yaml_path,)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Wrapper of the GROMACS editconf module.")
-    parser.add_argument('-m', '--mutation', required=True, help="Mutation in 'Leu858Arg' format")
-    parser.add_argument('-prn', '--pmx_resnum', required=False, default=0, type=int, help="(0) [integer]")
-    parser.add_argument('-l', '--ligand', required=False, default='APO', type=str, help="(apo) [apo] or [name_of_ligand]")
-    parser.add_argument('-wr', '--wt_replica', required=False, default=1, type=int, help="(1) [integer]")
-    parser.add_argument('-mr', '--mut_replica', required=False, default=1, type=int, help="(1) [integer]")
-    parser.add_argument('-q', '--queue', required=False, default='bsc_ls', type=str, help="(bsc_ls) [bsc_ls|debug]")
-    parser.add_argument('-t', '--time', required=False, default=120, type=int, help="(120) [integer] Time in minutes")
-    parser.add_argument('-nn', '--num_nodes', required=False, default=1, type=int, help="(1) [integer]")
-    parser.add_argument('-cv', '--compss_version', required=False, default='2.6.1', type=str, help="(2.6.1) [version_name]")
-    parser.add_argument('-d', '--compss_debug', required=False, help="Compss debug mode", action='store_true')
-    parser.add_argument('-fe', '--fe_length', required=False, default=50, type=int, help="(50) [integer] Number of picoseconds")
-    parser.add_argument('-nf', '--num_frames', required=False, default=100, type=int, help="(100) [integer] Number of frames to be extracted of trajectory")
-    parser.add_argument('--mut_start_end_num_frames', required=False, default=10000, type=int, help="(10000) [integer] Total number of frames between start and end of the mutated trajectory")
-    parser.add_argument('--wt_start_end_num_frames', required=False, default=10000, type=int, help="(10000) [integer] Total number of frames between start and end of the wt trajectory")
-    parser.add_argument('--wt_start', required=False, default=0, type=int, help="(0) [integer] Time of first frame to read from WT trajectory (default unit ps).")
-    parser.add_argument('--wt_end', required=False, default=0, type=int, help="(0) [integer] Time of last frame to read from WT trajectory (default unit ps).")
-    parser.add_argument('--mut_start', required=False, default=0, type=int, help="(0) [integer] Time of first frame to read from MUT trajectory (default unit ps).")
-    parser.add_argument('--mut_end', required=False, default=0, type=int, help="(0) [integer] Time of last frame to read from MUT trajectory (default unit ps).")
-    parser.add_argument('--base_dir', required=False, default='/gpfs/projects/bsc23/bsc23513/BioExcel/BioExcel_EGFR_pmx', type=str, help="('/gpfs/projects/bsc23/bsc23513/BioExcel/BioExcel_EGFR_pmx') [path_to_base_dir]")
-    parser.add_argument('-o', '--output_dir', required=False, default='', type=str, help="Output dir name: If output_dir is absolute it will be respected if it's a relative path: /base_dir/PMX/pmxlaunch/runs/output_dir', if output_dir not exists, the name is autogenerated.")
-    parser.add_argument('-jn', '--job_name', required=False, default='', type=str, help="Job name if it not exists, the name is autogenerated.")
-    parser.add_argument('--free_energy_dt', required=False, default=0.002, type=float, help="(0.002) [float] Integration time in picoseconds")
+    parser = argparse.ArgumentParser(description="Create configuration files and choose which workflow should be launched")
+    parser.add_argument('--csv', required=True, help="Config CSV file")
+    # parser.add_argument('-m', '--mutation', required=True, help="Mutation in 'Leu858Arg' format")
+    # parser.add_argument('-prn', '--pmx_resnum', required=False, default=0, type=int, help="(0) [integer]")
+    # parser.add_argument('-l', '--ligand', required=False, default='APO', type=str, help="(apo) [apo] or [name_of_ligand]")
+    # parser.add_argument('-wr', '--wt_replica', required=False, default=1, type=int, help="(1) [integer]")
+    # parser.add_argument('-mr', '--mut_replica', required=False, default=1, type=int, help="(1) [integer]")
+    # parser.add_argument('-q', '--queue', required=False, default='bsc_ls', type=str, help="(bsc_ls) [bsc_ls|debug]")
+    # parser.add_argument('-t', '--time', required=False, default=120, type=int, help="(120) [integer] Time in minutes")
+    # parser.add_argument('-nn', '--num_nodes', required=False, default=1, type=int, help="(1) [integer]")
+    # parser.add_argument('-cv', '--compss_version', required=False, default='2.6.1', type=str, help="(2.6.1) [version_name]")
+    # parser.add_argument('-d', '--compss_debug', required=False, help="Compss debug mode", action='store_true')
+    # parser.add_argument('-fe', '--fe_length', required=False, default=50, type=int, help="(50) [integer] Number of picoseconds")
+    # parser.add_argument('-nf', '--num_frames', required=False, default=100, type=int, help="(100) [integer] Number of frames to be stracted of trajectory")
+    # parser.add_argument('--free_energy_dt', required=False, default=0.002, type=float, help="(0.002) [float] Integration time in picoseconds")
+    # parser.add_argument('--trajectory_total_num_frames', required=False, default=10000, type=int, help="(10000) [integer] Total number of frames of the original trajectory")
+    # parser.add_argument('--base_dir', required=False, default='/gpfs/projects/bsc23/bsc23513/BioExcel/BioExcel_EGFR_pmx', type=str, help="('/gpfs/projects/bsc23/bsc23513/BioExcel/BioExcel_EGFR_pmx') [path_to_base_dir]")
     args = parser.parse_args()
 
-    # Specific call of each building block
-    launch(mutation=args.mutation,
-           pmx_resnum=args.pmx_resnum,
-           ligand=args.ligand.upper(),
-           wt_replica=args.wt_replica,
-           mut_replica=args.mut_replica,
-           queue=args.queue,
-           time=args.time,
-           num_nodes=args.num_nodes,
-           compss_version=args.compss_version,
-           compss_debug=args.compss_debug,
-           fe_nsteps=int(args.fe_length/args.free_energy_dt),
-           fe_length=args.fe_length,
-           output_dir=args.output_dir,
-           job_name=args.job_name,
-           fe_dt=args.free_energy_dt,
-           num_frames=args.num_frames,
-           wt_trjconv_skip=args.wt_start_end_num_frames // args.num_frames,
-           mut_trjconv_skip=args.mut_start_end_num_frames//args.num_frames,
-           wt_start=args.wt_start,
-           wt_end=args.wt_end,
-           mut_start=args.mut_start,
-           mut_end=args.mut_end,
-           base_dir=Path(args.base_dir)
-           )
+    # Read CSV to list of dicts
+    execution_dict_list, field_names = parse_csv(args.csv)
+    print('Dict List of CSV:')
+    print(execution_dict_list)
+    print('\n\n\n\n\n\n\n\n')
+
+    print('Field names of CSV:')
+    print(field_names)
+    print('\n\n\n\n\n\n\n\n')
+
+    # Properties of each subworkflow_launch
+    props.set_properties("2", "48", "/gpfs/projects/bsc23/bsc23513/BioExcel/BioExcel_EGFR_pmx/PMX/pmxlaunch/workflows/", "-d")
+
+    for line_num, execution_conf in enumerate(execution_dict_list):
+        # Apply defaults and launch
+        print(f'Apply defaults to configuration dict {line_num}:')
+        print(execution_conf)
+        print('\n\n\n\n\n\n\n\n')
+
+        print(f'Launch function {line_num}:')
+        print(f"launch(mutation={execution_conf['mutation']},\
+               pmx_resnum={execution_conf['pmx_resnum']}, \
+               ligand={execution_conf['ligand']}, \
+               wt_replica={execution_conf['wt_replica']}, \
+               mut_replica={execution_conf['mut_replica']}, \
+               fe_nsteps={int(execution_conf['fe_length']/execution_conf['free_energy_dt'])}, \
+               trjconv_skip={execution_conf['trajectory_total_num_frames']//execution_conf['num_frames']}, \
+               base_dir={Path(execution_conf['base_dir'])} \
+               )")
+        print('\n\n\n\n\n\n\n\n')
+
+        launch(mutation=execution_conf['mutation'],
+               pmx_resnum=execution_conf['pmx_resnum'],
+               ligand=execution_conf['ligand'],
+               wt_replica=execution_conf['wt_replica'],
+               mut_replica=execution_conf['mut_replica'],
+               fe_nsteps=int(execution_conf['fe_length']/execution_conf['free_energy_dt']),
+               fe_length=execution_conf['fe_length'],
+               output_dir=execution_conf['output_dir'],
+               fe_dt=execution_conf['free_energy_dt'],
+               num_frames=execution_conf['num_frames'],
+               wt_trjconv_skip=execution_conf['wt_start_end_num_frames'] // execution_conf['num_frames'],
+               mut_trjconv_skip=execution_conf['mut_start_end_num_frames'] // execution_conf['num_frames'],
+               wt_start=execution_conf['wt_start'],
+               wt_end=execution_conf['wt_end'],
+               mut_start=execution_conf['mut_start'],
+               mut_end=execution_conf['mut_end'],
+               base_dir=Path(execution_conf['base_dir'])
+               )
 
 
 if __name__ == '__main__':

@@ -23,10 +23,6 @@ def create_biobb_pth_file(file_path):
         pth_file.write("/home/bsc23/bsc23210/macshare/biobb_structure_utils")
 
 
-#def get_mutation_dict(mutation):
-#    pattern = re.compile(r"(?P<wt>[a-zA-Z]{3})(?P<resnum>\d+)(?P<mt>[a-zA-Z]{3})")
-#    return pattern.match(mutation.strip()).groupdict()
-
 def get_mutation_dict(mutation):
     if mutation.strip()[1].isdigit():
         pattern = re.compile(r"(?P<wt>[a-zA-Z]{1})(?P<resnum>\d+)(?P<mt>[a-zA-Z]{1})")
@@ -78,7 +74,9 @@ def get_template_config_dict(config_yaml_path):
         return yaml.safe_load(config_yaml_file)
 
 
-def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nodes, compss_version, fe_nsteps, trjconv_skip, base_dir, compss_debug, time):
+def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nodes, compss_version, fe_nsteps, fe_length,
+           base_dir, compss_debug, time, output_dir, fe_dt, num_frames, wt_trjconv_skip, mut_trjconv_skip,
+           wt_start, wt_end, mut_start, mut_end, job_name):
     if pmx_resnum == 0:
         pmx_resnum = int(get_mutation_dict(mutation)['resnum']) - RESIDUE_NUMBER_OFFSET
 
@@ -109,7 +107,24 @@ def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nod
     imaged_traj_available = is_imaged_traj_available(traj_wt_xtc_path, traj_mut_xtc_path)
 
     # Create working dir path
-    working_dir_path = base_dir.joinpath('PMX', 'pmxlaunch', 'runs', f"{three_to_one_mutation(mutation)}_{str(mut_replica)}_WT_{str(wt_replica)}", ligand.upper())
+    long_name = f"{three_to_one_mutation(mutation)}_{str(mut_replica)}_WT_{str(wt_replica)}_{str(num_frames)}f_{str(fe_length)}ps"
+    wt_start_str = str(wt_start)
+    wt_end_str = str(wt_end)+'ps'
+    if wt_start_str == '0' and wt_end_str == '0ps':
+        wt_start_str = 'all'
+        wt_end_str = 'all'
+    mut_start_str = str(mut_start)
+    mut_end_str = str(mut_end) + 'ps'
+    if mut_start_str == '0' and mut_end_str == '0ps':
+        mut_start_str = 'all'
+        mut_end_str = 'all'
+    working_dir_path = base_dir.joinpath('PMX', 'pmxlaunch', 'runs', long_name, f"{wt_start_str}to{wt_end_str}_{mut_start_str}to{mut_end_str}", ligand.upper())
+
+    if output_dir:
+        if output_dir.startswith('/'):
+            working_dir_path = Path(output_dir).resolve()
+        else:
+            working_dir_path = base_dir.joinpath('PMX', 'pmxlaunch', 'runs', output_dir)
     working_dir_path.mkdir(parents=True, exist_ok=True)
 
     # Check if it's the first launch
@@ -118,14 +133,15 @@ def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nod
     config_yaml_path = working_dir_path.joinpath(f"pmx.yaml")
     wf_py_path = working_dir_path.joinpath(f"pmx.py")
     launch_path = working_dir_path.joinpath(f"launch.sh")
-    job_name = f"pycompss_pmx"
+    if not job_name:
+        job_name = long_name
     while run_dir.exists():
         run_number += 1
         run_dir = working_dir_path.joinpath(f"wf_pmx_{str(run_number)}")
         config_yaml_path = working_dir_path.joinpath(f"pmx_{str(run_number)}.yaml")
         wf_py_path = working_dir_path.joinpath(f"pmx_{str(run_number)}.py")
         launch_path = working_dir_path.joinpath(f"launch_{str(run_number)}.sh")
-        job_name = f"pycompss_pmx_{str(run_number)}"
+        job_name = f"{job_name}_{str(run_number)}"
 
     # Copy py file
     shutil.copyfile(template_py_path, wf_py_path)
@@ -141,7 +157,13 @@ def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nod
     config_dict['input_trajs']['stateA']['input_traj_path'] = str(traj_wt_xtc_path)
     config_dict['input_trajs']['stateB']['input_tpr_path'] = str(traj_mut_tpr_path)
     config_dict['input_trajs']['stateB']['input_traj_path'] = str(traj_mut_xtc_path)
-    config_dict['step1_trjconv']['properties']['skip'] = trjconv_skip
+    config_dict['step1_trjconv_stateA']['properties']['skip'] = wt_trjconv_skip
+    config_dict['step1_trjconv_stateA']['properties']['start'] = wt_start
+    config_dict['step1_trjconv_stateA']['properties']['end'] = wt_end
+    config_dict['step1_trjconv_stateB']['properties']['skip'] = mut_trjconv_skip
+    config_dict['step1_trjconv_stateB']['properties']['start'] = mut_start
+    config_dict['step1_trjconv_stateB']['properties']['end'] = mut_end
+
     if apo:
         config_dict['step11_gmx_grompp']['properties']['mdp']['nsteps'] = fe_nsteps
         config_dict['step11_gmx_grompp']['properties']['mdp']['delta-lambda'] =  float(f'{1 / fe_nsteps:.0g}')
@@ -154,6 +176,7 @@ def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nod
         config_dict['step7_lig_gmx_appendLigand']['paths']['input_posres_itp_path'] = str(base_dir.joinpath('ITPs', f"posre_{clean_ligand_name}.itp"))
         config_dict['step7_lig_gmx_appendLigand']['properties']['posres_name'] = f"POSRES_{clean_ligand_name}"
         config_dict['step14_gmx_grompp']['properties']['mdp']['nsteps'] = fe_nsteps
+        config_dict['step14_gmx_grompp']['properties']['mdp']['dt'] = fe_dt
 
     with open(config_yaml_path, 'w') as config_yaml_file:
         config_yaml_file.write(yaml.dump(config_dict))
@@ -187,6 +210,7 @@ def launch(mutation, pmx_resnum, ligand, wt_replica, mut_replica, queue, num_nod
         launch_file.write(f"--job_name={job_name} \
                           --num_nodes={num_nodes} \
                           --exec_time={str(time)} \
+                          --base_log_dir=$PWD \
                           --network=ethernet \
                           --qos={queue}  \
                           {wf_py_path} \
@@ -211,10 +235,17 @@ def main():
     parser.add_argument('-cv', '--compss_version', required=False, default='2.6.1', type=str, help="(2.6.1) [version_name]")
     parser.add_argument('-d', '--compss_debug', required=False, help="Compss debug mode", action='store_true')
     parser.add_argument('-fe', '--fe_length', required=False, default=50, type=int, help="(50) [integer] Number of picoseconds")
-    parser.add_argument('-nf', '--num_frames', required=False, default=100, type=int, help="(100) [integer] Number of frames to be stracted of trajectory")
-    parser.add_argument('--free_energy_dt', required=False, default=0.002, type=float, help="(0.002) [float] Integration time in picoseconds")
-    parser.add_argument('--trajectory_total_num_frames', required=False, default=10000, type=int, help="(10000) [integer] Total number of frames of the original trajectory")
+    parser.add_argument('-nf', '--num_frames', required=False, default=100, type=int, help="(100) [integer] Number of frames to be extracted of trajectory")
+    parser.add_argument('--mut_start_end_num_frames', required=False, default=10000, type=int, help="(10000) [integer] Total number of frames between start and end of the mutated trajectory")
+    parser.add_argument('--wt_start_end_num_frames', required=False, default=10000, type=int, help="(10000) [integer] Total number of frames between start and end of the wt trajectory")
+    parser.add_argument('--wt_start', required=False, default=0, type=int, help="(0) [integer] Time of first frame to read from WT trajectory (default unit ps).")
+    parser.add_argument('--wt_end', required=False, default=0, type=int, help="(0) [integer] Time of last frame to read from WT trajectory (default unit ps).")
+    parser.add_argument('--mut_start', required=False, default=0, type=int, help="(0) [integer] Time of first frame to read from MUT trajectory (default unit ps).")
+    parser.add_argument('--mut_end', required=False, default=0, type=int, help="(0) [integer] Time of last frame to read from MUT trajectory (default unit ps).")
     parser.add_argument('--base_dir', required=False, default='/gpfs/projects/bsc23/bsc23513/BioExcel/BioExcel_EGFR_pmx', type=str, help="('/gpfs/projects/bsc23/bsc23513/BioExcel/BioExcel_EGFR_pmx') [path_to_base_dir]")
+    parser.add_argument('-o', '--output_dir', required=False, default='', type=str, help="Output dir name: If output_dir is absolute it will be respected if it's a relative path: /base_dir/PMX/pmxlaunch/runs/output_dir', if output_dir not exists, the name is autogenerated.")
+    parser.add_argument('-jn', '--job_name', required=False, default='', type=str, help="Job name if it not exists, the name is autogenerated.")
+    parser.add_argument('--free_energy_dt', required=False, default=0.002, type=float, help="(0.002) [float] Integration time in picoseconds")
     args = parser.parse_args()
 
     # Specific call of each building block
@@ -229,7 +260,17 @@ def main():
            compss_version=args.compss_version,
            compss_debug=args.compss_debug,
            fe_nsteps=int(args.fe_length/args.free_energy_dt),
-           trjconv_skip=args.trajectory_total_num_frames//args.num_frames,
+           fe_length=args.fe_length,
+           output_dir=args.output_dir,
+           job_name=args.job_name,
+           fe_dt=args.free_energy_dt,
+           num_frames=args.num_frames,
+           wt_trjconv_skip=args.wt_start_end_num_frames // args.num_frames,
+           mut_trjconv_skip=args.mut_start_end_num_frames//args.num_frames,
+           wt_start=args.wt_start,
+           wt_end=args.wt_end,
+           mut_start=args.mut_start,
+           mut_end=args.mut_end,
            base_dir=Path(args.base_dir)
            )
 

@@ -1,0 +1,3 @@
+mutation, pmx_resnum, ligand, wt_replica, mut_replica, fe_length, num_frames, free_energy_dt, trajectory_total_num_frames, base_dir
+"G796S",,"IRE",1,1,,10,
+"L858R",,"ICO_B",1,1,,,,50000,

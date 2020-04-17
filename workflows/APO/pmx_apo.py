@@ -55,20 +55,20 @@ def main(config, imaged_traj_available):
 
         else:
             # An imaged trajectory is available
-            ensemble_paths['step1_trjconv']['input_traj_path'] = conf.properties['input_trajs'][ensemble]['input_traj_path']
+            ensemble_paths['step1_trjconv_'+ensemble]['input_traj_path'] = conf.properties['input_trajs'][ensemble]['input_traj_path']
 
         # step1_trjconv
         global_log.info(ensemble+" Step 1: gmx trjconv: Extract snapshots from equilibrium trajectories")
-        ensemble_paths['step1_trjconv']['input_top_path'] = conf.properties['input_trajs'][ensemble]['input_tpr_path']
-        gmx_trjconv_str_ens_pc(**ensemble_paths["step1_trjconv"], properties=ensemble_prop["step1_trjconv"])
+        ensemble_paths['step1_trjconv_'+ensemble]['input_top_path'] = conf.properties['input_trajs'][ensemble]['input_tpr_path']
+        gmx_trjconv_str_ens_pc(**ensemble_paths['step1_trjconv_'+ensemble], properties=ensemble_prop['step1_trjconv_'+ensemble])
 
     for ensemble, mutation in conf.properties['mutations'].items():
         ensemble_prop = conf.get_prop_dic(prefix=ensemble)
         ensemble_paths = conf.get_paths_dic(prefix=ensemble)
-        compss_wait_on_file(ensemble_paths["step1_trjconv"]["output_str_ens_path"])
+        compss_wait_on_file(ensemble_paths['step1_trjconv_'+ensemble]["output_str_ens_path"])
 
-        with zipfile.ZipFile(ensemble_paths["step1_trjconv"]["output_str_ens_path"]) as zip_f:
-            unique_dir = os.path.abspath(fu.create_unique_dir(prefix=ensemble_prop["step1_trjconv"]['working_dir_path']+'/'+ensemble+'/'))
+        with zipfile.ZipFile(ensemble_paths['step1_trjconv_'+ensemble]["output_str_ens_path"]) as zip_f:
+            unique_dir = os.path.abspath(fu.create_unique_dir(prefix=ensemble_prop['step1_trjconv_'+ensemble]['working_dir_path']+'/'+ensemble+'/'))
             zip_f.extractall(unique_dir)
             state_pdb_list = [os.path.join(unique_dir, name)for name in zip_f.namelist()]
 
