@@ -89,6 +89,7 @@ def main(config, imaged_traj_available):
             # step3_check_dummies
             global_log.info(ensemble + " " + pdb_name + " Step 3 Check for dummy atoms")
             extract_atoms_pc(**paths['step3_check_dummies'], properties=prop['step3_check_dummies'])
+
             compss_wait_on_file(paths['step3_check_dummies']['output_structure_path'])
             try:
                 dummy = bool(os.path.getsize(paths['step3_check_dummies']['output_structure_path']))

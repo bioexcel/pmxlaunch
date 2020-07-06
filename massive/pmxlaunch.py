@@ -12,6 +12,9 @@ from wf_defs import props
 
 
 def create_biobb_pth_file(file_path):
+    file_dir = Path(file_path).parent
+    if not file_dir.exists():
+        file_dir.mkdir(parents=True, exist_ok=True)
     with open(file_path, 'w') as pth_file:
         pth_file.write("/home/bsc23/bsc23210/macshare/biobb_common \n")
         pth_file.write("/home/bsc23/bsc23210/macshare/biobb_md \n")
